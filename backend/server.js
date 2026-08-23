@@ -5,6 +5,13 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
+
+// Password Hashing Helper using native pbkdf2
+function hashPassword(password) {
+  const salt = 'think_lastmile_salt_123';
+  return crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+}
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -177,20 +184,20 @@ const initDB = async () => {
   if (countObj.count === 0) {
     console.log('Seeding database with default mock resources...');
     
-    // Seed logins
+    // Seed logins with hashed passwords
     await run(`INSERT INTO users (username, password, role, email, phone) VALUES 
-      ('admin', 'admin123', 'admin', 'admin@thinklastmile.com', '+15550100'),
-      ('customer1', 'cust123', 'customer', 'customer1@gmail.com', '+15550101'),
-      ('customer2', 'cust123', 'customer', 'customer2@gmail.com', '+15550102')
-    `);
+      ('admin', ?, 'admin', 'admin@thinklastmile.com', '+15550100'),
+      ('customer1', ?, 'customer', 'customer1@gmail.com', '+15550101'),
+      ('customer2', ?, 'customer', 'customer2@gmail.com', '+15550102')
+    `, [hashPassword('admin123'), hashPassword('cust123'), hashPassword('cust123')]);
 
-    // Seed agents around Manhattan/Brooklyn (lat: 40.7, lng: -74.0)
+    // Seed agents around Manhattan/Brooklyn with hashed passwords
     await run(`INSERT INTO users (username, password, role, email, phone, current_lat, current_lng, rating, points) VALUES 
-      ('agent_soho', 'agent123', 'agent', 'soho_rider@delivery.com', '+15550201', 40.7250, -74.0100, 4.8, 120),
-      ('agent_midtown', 'agent123', 'agent', 'midtown_rider@delivery.com', '+15550202', 40.7500, -73.9900, 4.5, 80),
-      ('agent_brooklyn', 'agent123', 'agent', 'brooklyn_rider@delivery.com', '+15550203', 40.6920, -73.9880, 4.9, 210),
-      ('agent_queens', 'agent123', 'agent', 'queens_rider@delivery.com', '+15550204', 40.7420, -73.9490, 4.2, 50)
-    `);
+      ('agent_soho', ?, 'agent', 'soho_rider@delivery.com', '+15550201', 40.7250, -74.0100, 4.8, 120),
+      ('agent_midtown', ?, 'agent', 'midtown_rider@delivery.com', '+15550202', 40.7500, -73.9900, 4.5, 80),
+      ('agent_brooklyn', ?, 'agent', 'brooklyn_rider@delivery.com', '+15550203', 40.6920, -73.9880, 4.9, 210),
+      ('agent_queens', ?, 'agent', 'queens_rider@delivery.com', '+15550204', 40.7420, -73.9490, 4.2, 50)
+    `, [hashPassword('agent123'), hashPassword('agent123'), hashPassword('agent123'), hashPassword('agent123')]);
 
     // Seed zones
     await run(`INSERT INTO zones (name, center_lat, center_lng, radius_km) VALUES 
@@ -199,11 +206,20 @@ const initDB = async () => {
       ('Queens West', 40.7420, -73.9490, 3.5)
     `);
 
-    // Seed rates
+    // Seed rates dynamically from environmental variables
+    const baseRateB2B = parseFloat(process.env.BASE_RATE_B2B || '20.0');
+    const baseRateB2C = parseFloat(process.env.BASE_RATE_B2C || '15.0');
+    const intraZoneB2B = parseFloat(process.env.INTRA_ZONE_RATE_KG_B2B || '5.0');
+    const intraZoneB2C = parseFloat(process.env.INTRA_ZONE_RATE_KG_B2C || '4.0');
+    const interZoneB2B = parseFloat(process.env.INTER_ZONE_RATE_KG_B2B || '10.0');
+    const interZoneB2C = parseFloat(process.env.INTER_ZONE_RATE_KG_B2C || '8.0');
+    const codB2B = parseFloat(process.env.COD_SURCHARGE_FLAT_B2B || '15.0');
+    const codB2C = parseFloat(process.env.COD_SURCHARGE_FLAT_B2C || '10.0');
+
     await run(`INSERT INTO rate_cards (order_type, base_weight_kg, base_rate, intra_zone_rate_per_kg, inter_zone_rate_per_kg, cod_surcharge_flat) VALUES 
-      ('B2B', 5.0, 20.0, 5.0, 10.0, 15.0),
-      ('B2C', 2.0, 15.0, 4.0, 8.0, 10.0)
-    `);
+      ('B2B', 5.0, ?, ?, ?, ?),
+      ('B2C', 2.0, ?, ?, ?, ?)
+    `, [baseRateB2B, intraZoneB2B, interZoneB2B, codB2B, baseRateB2C, intraZoneB2C, interZoneB2C, codB2C]);
 
     console.log('Seeding completed.');
   }
@@ -619,7 +635,7 @@ app.post('/api/auth/register', async (req, res) => {
     }
     const result = await run(
       'INSERT INTO users (username, password, role, email, phone, current_lat, current_lng) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [username, password, role, email, phone, lat, lng]
+      [username, hashPassword(password), role, email, phone, lat, lng]
     );
     res.status(201).json({ id: result.id, username, role, email, phone, current_lat: lat, current_lng: lng, rating: 5.0, points: 0 });
   } catch (err) {
@@ -631,7 +647,7 @@ app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
   try {
     const user = await get('SELECT id, username, password, role, email, phone, current_lat, current_lng, rating, points FROM users WHERE username = ?', [username]);
-    if (!user || user.password !== password) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!user || user.password !== hashPassword(password)) return res.status(401).json({ error: 'Invalid credentials' });
     delete user.password;
     res.json(user);
   } catch (err) {
@@ -699,6 +715,29 @@ app.post('/api/orders', async (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Auth required' });
   const { pickup_address, pickup_lat, pickup_lng, drop_address, drop_lat, drop_lng, dimensions, actual_weight, order_type, payment_type, weather, traffic } = req.body;
   
+  if (!pickup_address || !drop_address) return res.status(400).json({ error: 'Pickup and drop address descriptions are required.' });
+  const pLat = parseFloat(pickup_lat);
+  const pLng = parseFloat(pickup_lng);
+  const dLat = parseFloat(drop_lat);
+  const dLng = parseFloat(drop_lng);
+  const actWt = parseFloat(actual_weight);
+  
+  if (isNaN(pLat) || isNaN(pLng) || isNaN(dLat) || isNaN(dLng)) {
+    return res.status(400).json({ error: 'Pickup and drop coordinates must be valid numbers.' });
+  }
+  if (isNaN(actWt) || actWt <= 0) {
+    return res.status(400).json({ error: 'Actual weight must be a positive number.' });
+  }
+  if (!dimensions || typeof dimensions !== 'string' || !dimensions.toLowerCase().includes('x')) {
+    return res.status(400).json({ error: 'Dimensions must be formatted as LxWxH (e.g. 30x20x15).' });
+  }
+  if (!['B2B', 'B2C'].includes(order_type)) {
+    return res.status(400).json({ error: 'Order type must be B2B or B2C.' });
+  }
+  if (!['Prepaid', 'COD'].includes(payment_type)) {
+    return res.status(400).json({ error: 'Payment type must be Prepaid or COD.' });
+  }
+
   try {
     const pricing = await calculateOrderCharge({ pickup_lat, pickup_lng, drop_lat, drop_lng, dimensions, actual_weight, order_type, payment_type, weather, traffic });
     
