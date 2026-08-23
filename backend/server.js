@@ -441,6 +441,24 @@ async function logNotification(orderId, type, recipient, message) {
   );
 }
 
+function wrapEmail(orderId, title, contentHtml) {
+  return `
+    <div style="font-family: 'Outfit', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 25px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); max-width: 550px; margin: 15px auto; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);">
+      <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px; margin-bottom: 20px;">
+        <span style="font-size: 1.15rem; font-weight: 700; color: #818cf8;">Think Last-Mile</span>
+        <span style="font-size: 0.7rem; color: #cbd5e1; font-weight: 600; text-transform: uppercase; background-color: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99,102,241,0.25); padding: 2px 8px; border-radius: 12px;">Order #${orderId}</span>
+      </div>
+      <h2 style="font-size: 1.25rem; font-weight: 600; color: #ffffff; margin-top: 0; margin-bottom: 15px; border: none; padding: 0;">${title}</h2>
+      <div style="font-size: 0.85rem; line-height: 1.6; color: #cbd5e1;">
+        ${contentHtml}
+      </div>
+      <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px; margin-top: 25px; font-size: 0.7rem; color: #94a3b8; text-align: center;">
+        This is an automated notification from your Think Last-Mile logistics dashboard.
+      </div>
+    </div>
+  `;
+}
+
 async function triggerOrderStatusNotifications(order, newStatus, remarks = '') {
   const customerEmail = order.customer_email || 'customer@example.com';
   const customerPhone = order.customer_phone || '+15550000';
@@ -453,43 +471,89 @@ async function triggerOrderStatusNotifications(order, newStatus, remarks = '') {
   switch (newStatus) {
     case 'Created':
       emailSubject = `Order Created Successfully - Order #${orderId}`;
-      emailHtml = `<div style="font-family: Arial; padding: 20px;"><h2>Order Received</h2><p>Your order #${orderId} has been created.</p><p>Pickup: ${order.pickup_address}</p><p>Drop: ${order.drop_address}</p><p>Total Price: $${order.total_charge.toFixed(2)}</p></div>`;
+      emailHtml = wrapEmail(orderId, 'Order Placed Successfully', `
+        <p>Your delivery request has been logged in our system. A courier will be assigned shortly.</p>
+        <div style="background-color: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 12px; margin: 15px 0;">
+          <div style="margin-bottom: 6px;">📍 <strong>Pickup:</strong> ${order.pickup_address}</div>
+          <div style="margin-bottom: 6px;">🎯 <strong>Drop-off:</strong> ${order.drop_address}</div>
+          <div style="margin-bottom: 6px;">📦 <strong>SLA / Weight:</strong> ${order.order_type} | ${order.billing_weight} kg</div>
+          <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.05); margin: 8px 0;" />
+          <div style="display: flex; justify-content: space-between; font-weight: 700; color: #34d399; font-size: 0.95rem;">
+            <span>Total Charge:</span>
+            <span>$${order.total_charge.toFixed(2)}</span>
+          </div>
+        </div>
+      `);
       smsText = `Order #${orderId} created successfully. Charge: $${order.total_charge.toFixed(2)}. We will notify you when a rider is assigned!`;
       break;
 
     case 'Assigned':
       emailSubject = `Courier Assigned to Order #${orderId}`;
-      emailHtml = `<div style="font-family: Arial; padding: 20px;"><h2>Rider Assigned</h2><p>Rider ${order.agent_name} is on the way. Courier rating: ⭐ ${order.agent_rating || '5.0'}</p></div>`;
+      emailHtml = wrapEmail(orderId, 'Courier Dispatched', `
+        <p>A delivery agent has been matched to your order and is currently heading to the pickup location.</p>
+        <div style="background-color: rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.15); border-radius: 8px; padding: 12px; margin: 15px 0;">
+          <div style="font-weight: 600; color: #fff;">🏍️ Courier Assigned: <strong>${order.agent_name}</strong></div>
+          <div style="font-size: 0.75rem; color: #fbbf24; margin-top: 4px;">Rider Rating: ⭐ ${order.agent_rating || '5.0'}</div>
+        </div>
+      `);
       smsText = `Rider ${order.agent_name} has been assigned to your order #${orderId} and is heading to pick up.`;
       break;
 
     case 'Picked Up':
       emailSubject = `Your Package Has Been Picked Up - Order #${orderId}`;
-      emailHtml = `<div style="font-family: Arial; padding: 20px;"><h2>Picked Up!</h2><p>Rider ${order.agent_name} has picked up your package for order #${orderId}.</p></div>`;
+      emailHtml = wrapEmail(orderId, 'Package Picked Up', `
+        <p>Our courier <strong>${order.agent_name}</strong> has picked up your package. The shipment is now on the move.</p>
+        <div style="font-size: 0.8rem; color: #94a3b8; border-left: 2px solid #f59e0b; padding-left: 10px; margin: 15px 0;">
+          Next step: Transit scanning and route dispatching.
+        </div>
+      `);
       smsText = `Rider ${order.agent_name} has picked up your package for order #${orderId}. It is now en route!`;
       break;
 
     case 'In Transit':
       emailSubject = `Transit Update - Order #${orderId}`;
-      emailHtml = `<div style="font-family: Arial; padding: 20px;"><h2>In Transit</h2><p>Your order #${orderId} is en route. Status: ${remarks || 'Normal'}.</p></div>`;
+      emailHtml = wrapEmail(orderId, 'Transit Update', `
+        <p>Your order is currently in transit. Status update from route:</p>
+        <div style="background-color: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 12px; margin: 15px 0; font-style: italic;">
+          "${remarks || 'Normal transit schedule'}"
+        </div>
+      `);
       smsText = `Order #${orderId} is en route. Status: ${remarks || 'Normal'}.`;
       break;
 
     case 'Out for Delivery':
       emailSubject = `Order Out for Delivery - Order #${orderId}`;
-      emailHtml = `<div style="font-family: Arial; padding: 20px;"><h2>Out for Delivery</h2><p>Your package #${orderId} is out for final delivery with ${order.agent_name}.</p></div>`;
+      emailHtml = wrapEmail(orderId, 'Out for Final Delivery', `
+        <p>Get ready! Courier <strong>${order.agent_name}</strong> is out for the final delivery run to your address.</p>
+        <div style="background-color: rgba(236, 72, 153, 0.05); border: 1px solid rgba(236, 72, 153, 0.15); border-radius: 8px; padding: 12px; margin: 15px 0;">
+          📍 <strong>Drop Address:</strong> ${order.drop_address}
+        </div>
+      `);
       smsText = `Your package #${orderId} is out for final delivery with ${order.agent_name}.`;
       break;
 
     case 'Delivered':
       emailSubject = `Delivered! - Order #${orderId}`;
-      emailHtml = `<div style="font-family: Arial; padding: 20px; color: #10b981;"><h2>Delivered</h2><p>Your order #${orderId} has been successfully delivered by ${order.agent_name}. Thank you!</p></div>`;
+      emailHtml = wrapEmail(orderId, 'Order Delivered Successfully 🎉', `
+        <p style="color: #34d399; font-weight: 600; font-size: 0.95rem; margin-top: 0;">Delivered!</p>
+        <p>Your package has been successfully dropped off at the destination by courier <strong>${order.agent_name}</strong>.</p>
+        <div style="background-color: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.15); border-radius: 8px; padding: 12px; margin: 15px 0;">
+          Thank you for choosing Think Last-Mile logistics! Please rate your rider on your active dashboard view.
+        </div>
+      `);
       smsText = `Order #${orderId} has been successfully delivered. Rate your rider ${order.agent_name} on the app!`;
       break;
 
     case 'Failed':
       emailSubject = `Delivery Failed Attempt - Order #${orderId}`;
-      emailHtml = `<div style="font-family: Arial; padding: 20px; color: #ef4444;"><h2>Delivery Unsuccessful</h2><p>We attempted to deliver order #${orderId} but were unsuccessful.</p><p>Reason: ${remarks || 'Recipient not available'}</p><p>Please reschedule on your dashboard.</p></div>`;
+      emailHtml = wrapEmail(orderId, 'Delivery Attempt Unsuccessful ⚠️', `
+        <p style="color: #f87171; font-weight: 600; font-size: 0.95rem; margin-top: 0;">Unsuccessful Attempt</p>
+        <p>We attempted to deliver your order but were unsuccessful.</p>
+        <div style="background-color: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.15); border-radius: 8px; padding: 12px; margin: 15px 0;">
+          ❌ <strong>Reason for failure:</strong> ${remarks || 'Recipient unavailable'}<br/>
+          📅 Please open your tracker dashboard to reschedule for a new date.
+        </div>
+      `);
       smsText = `Delivery attempt failed for order #${orderId} (Reason: ${remarks || 'Unsuccessful'}). Please reschedule on the dashboard.`;
       break;
   }
@@ -767,8 +831,46 @@ app.post('/api/orders/:id/status', async (req, res) => {
   }
 });
 
+// Reschedule Slots Efficiency Lookup Endpoint
+app.get('/api/orders/:id/reschedule-slots', async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ error: 'Date parameter required' });
+  
+  try {
+    const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    
+    const zoneId = order.pickup_zone_id || order.drop_zone_id;
+    let count = 0;
+    if (zoneId) {
+      // Count existing orders in the same zone on that date
+      const result = await get(
+        `SELECT COUNT(*) as count FROM orders 
+         WHERE (pickup_zone_id = ? OR drop_zone_id = ?) 
+           AND (reschedule_date = ? OR (reschedule_date IS NULL AND date(created_at) = ?))`,
+        [zoneId, zoneId, date, date]
+      );
+      count = result ? result.count : 0;
+    }
+    
+    // Dynamic efficiency modeling based on zone order density
+    const hasCoRoute = count > 0;
+    res.json({
+      date,
+      count,
+      slots: [
+        { name: 'morning', label: '9 AM - 12 PM', efficiency: hasCoRoute ? 92 : 30, coRouteFound: hasCoRoute },
+        { name: 'afternoon', label: '12 PM - 3 PM', efficiency: hasCoRoute ? 88 : 35, coRouteFound: hasCoRoute },
+        { name: 'evening', label: '3 PM - 6 PM', efficiency: hasCoRoute ? 45 : 20, coRouteFound: hasCoRoute }
+      ]
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/orders/:id/reschedule', async (req, res) => {
-  const { reschedule_date } = req.body;
+  const { reschedule_date, reschedule_slot } = req.body;
   try {
     const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
     if (!order || order.status !== 'Failed') return res.status(400).json({ error: 'Order must be in failed state to reschedule' });
@@ -776,15 +878,41 @@ app.post('/api/orders/:id/reschedule', async (req, res) => {
     const fromStatus = order.status;
     const actorId = req.user ? req.user.id : order.customer_id;
     const actorName = req.user ? req.user.username : (order.customer_name || 'customer');
+    const previousAgentId = order.agent_id;
+
+    // Check if slot has co-routing potential (efficiency >= 70%)
+    const zoneId = order.pickup_zone_id || order.drop_zone_id;
+    let count = 0;
+    if (zoneId && reschedule_date) {
+      const result = await get(
+        `SELECT COUNT(*) as count FROM orders 
+         WHERE (pickup_zone_id = ? OR drop_zone_id = ?) 
+           AND (reschedule_date = ? OR (reschedule_date IS NULL AND date(created_at) = ?))`,
+        [zoneId, zoneId, reschedule_date, reschedule_date]
+      );
+      count = result ? result.count : 0;
+    }
+
+    const hasCoRouteDiscount = count > 0;
+    let newTotalCharge = order.total_charge;
+    let discountApplied = 0;
+    let remarks = `Rescheduled for ${reschedule_date} (${reschedule_slot || 'Standard Slot'}).`;
+
+    if (hasCoRouteDiscount && order.discount_applied === 0) {
+      discountApplied = 1;
+      newTotalCharge = Number((order.total_charge * 0.9).toFixed(2));
+      remarks += ` 10% Green Co-Routing discount applied! Saved $${(order.total_charge - newTotalCharge).toFixed(2)}.`;
+    }
 
     await run(
-      "UPDATE orders SET status = 'Created', agent_id = NULL, agent_name = NULL, reschedule_date = ? WHERE id = ?",
-      [reschedule_date, order.id]
+      "UPDATE orders SET status = 'Created', agent_id = NULL, agent_name = NULL, reschedule_date = ?, reschedule_slot = ?, discount_applied = ?, total_charge = ? WHERE id = ?",
+      [reschedule_date, reschedule_slot || null, discountApplied || order.discount_applied, newTotalCharge, order.id]
     );
-    await run('INSERT INTO order_history (order_id, from_status, to_status, updated_by_id, updated_by_username, remarks) VALUES (?, ?, \'Created\', ?, ?, ?)', [order.id, fromStatus, actorId, actorName, `Rescheduled for ${reschedule_date}. Courier reset.`]);
+    await run('INSERT INTO order_history (order_id, from_status, to_status, updated_by_id, updated_by_username, remarks) VALUES (?, ?, \'Created\', ?, ?, ?)', [order.id, fromStatus, actorId, actorName, remarks]);
 
     const updated = await get('SELECT * FROM orders WHERE id = ?', [order.id]);
-    const bestAgent = await autoAssignAgent(updated);
+    // Dispatch closest rider EXCLUDING the previous agent who failed
+    const bestAgent = await autoAssignAgent(updated, previousAgentId);
     if (bestAgent) {
       await run('UPDATE orders SET agent_id = ?, agent_name = ?, status = \'Assigned\' WHERE id = ?', [bestAgent.id, bestAgent.username, order.id]);
       await run('INSERT INTO order_history (order_id, from_status, to_status, updated_by_id, updated_by_username, remarks) VALUES (?, \'Created\', \'Assigned\', 1, \'system\', ?)', [order.id, `Re-assigned closest rider ${bestAgent.username}.`]);
