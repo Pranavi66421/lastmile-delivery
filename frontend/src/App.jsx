@@ -1061,12 +1061,23 @@ function AgentPortal({ agents, orders, onUpdateStatus, onSimulateGPS, currentUse
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isSimulatingMove, setIsSimulatingMove] = useState(false);
 
+  useEffect(() => {
+    if (currentUser && currentUser.role === 'agent') {
+      setSelectedAgentId(currentUser.id.toString());
+    }
+  }, [currentUser]);
+
   const activeAgent = agents.find(a => a.id === parseInt(selectedAgentId));
   const assignedOrders = orders.filter(o => o.agent_id === parseInt(selectedAgentId) && o.status !== 'Delivered');
 
   useEffect(() => {
-    if (assignedOrders.length > 0) setSelectedOrderId(assignedOrders[0].id);
-    else setSelectedOrderId('');
+    if (assignedOrders.length > 0) {
+      if (!selectedOrderId || !assignedOrders.find(o => o.id === parseInt(selectedOrderId))) {
+        setSelectedOrderId(assignedOrders[0].id.toString());
+      }
+    } else {
+      setSelectedOrderId('');
+    }
   }, [selectedAgentId, orders]);
 
   const selectedOrder = orders.find(o => o.id === parseInt(selectedOrderId));
@@ -1133,17 +1144,19 @@ function AgentPortal({ agents, orders, onUpdateStatus, onSimulateGPS, currentUse
 
   return (
     <div>
-      <div className="glass-card">
-        <h3 className="card-title"><Compass size={16} color="#6366f1"/> Select Active Courier</h3>
-        <select className="form-input" value={selectedAgentId} onChange={e => setSelectedAgentId(e.target.value)}>
-          <option value="">-- Choose Rider --</option>
-          {agents.map(a => (
-            <option key={a.id} value={a.id}>
-              {a.username} (🏆 {a.points} XP) - {a.active_jobs || 0}/3 active jobs
-            </option>
-          ))}
-        </select>
-      </div>
+      {(!currentUser || currentUser.role !== 'agent') && (
+        <div className="glass-card">
+          <h3 className="card-title"><Compass size={16} color="#6366f1"/> Select Active Courier</h3>
+          <select className="form-input" value={selectedAgentId} onChange={e => setSelectedAgentId(e.target.value)}>
+            <option value="">-- Choose Rider --</option>
+            {agents.map(a => (
+              <option key={a.id} value={a.id}>
+                {a.username} (🏆 {a.points} XP) - {a.active_jobs || 0}/3 active jobs
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {activeAgent ? (
         <div className="phone-wrapper">
@@ -1520,91 +1533,88 @@ export default function App() {
         </div>
       </header>
 
-      <main className="dashboard-grid">
-        <section className="sidebar-left" style={{ padding: '1.25rem' }}>
-          <div className="role-tabs">
-            {['customer', 'admin', 'agent'].map(role => (
-              <button 
-                key={role} 
-                className={`role-tab ${activeTab === role ? 'active' : ''}`} 
-                onClick={() => {
-                  setActiveTab(role);
-                  // Auto-login to seeded user when switching tabs for reviewer convenience
-                  if (role === 'customer' && currentUser?.role !== 'customer') {
-                    handleReviewerQuickLogin('customer1', 'cust123');
-                  } else if (role === 'admin' && currentUser?.role !== 'admin') {
-                    handleReviewerQuickLogin('admin', 'admin123');
-                  } else if (role === 'agent' && currentUser?.role !== 'agent') {
-                    handleReviewerQuickLogin('agent_soho', 'agent123');
-                  }
-                }}
-              >
-                {role.toUpperCase()}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ flex: 1 }}>
-            {activeTab === 'customer' && (
-              <CustomerPortal 
-                orders={orders} mapClickCoords={mapClickCoords} clearMapClickCoords={() => setMapClickCoords(null)}
-                onCalculateRates={handleCalculateRates} onPlaceOrder={handlePlaceOrder} onRescheduleOrder={handleRescheduleOrder}
-                weather={weather} traffic={traffic} currentUser={currentUser} getAuthHeaders={getAuthHeaders}
-              />
-            )}
-            {activeTab === 'admin' && (
-              <AdminPanel 
-                zones={zones} orders={orders} agents={agents} rates={rates}
-                onAddZone={handleAddZone} onDeleteZone={handleDeleteZone} onUpdateRates={handleUpdateRates}
-                onAutoAssign={handleAutoAssign} onManualAssign={handleManualAssign} onTriggerVRPOptimize={handleTriggerVRPOptimize}
-                mapClickCoords={mapClickCoords} clearMapClickCoords={() => setMapClickCoords(null)}
-                onCalculateRates={handleCalculateRates} onPlaceOrder={handlePlaceOrder} weather={weather} traffic={traffic}
-              />
-            )}
-            {activeTab === 'agent' && (
-              <AgentPortal 
-                agents={agents} orders={orders} onUpdateStatus={handleUpdateStatus} onSimulateGPS={handleSimulateGPS} 
-                currentUser={currentUser} getAuthHeaders={getAuthHeaders}
-              />
-            )}
-          </div>
-        </section>
-
-        <section className="center-area">
-          <div className="map-container" style={{ height: '65%' }}>
+      {currentUser && currentUser.role === 'agent' ? (
+        <main className="agent-dashboard-layout">
+          <div className="agent-background-map">
             <MapComponent 
               zones={zones} orders={orders} agents={agents}
-              activeSelection={activeSelection} onMapClick={handleMapClick} optimizedRoute={optimizedRoute}
+              activeSelection={activeSelection} onMapClick={() => {}} optimizedRoute={null}
               selectedOrderId={selectedOrderId}
             />
           </div>
-          <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <h3 style={{ fontSize: '0.9rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <Shield size={16} color="#6366f1"/> Active System Console
-              </h3>
-            </div>
-            <div className="glass-card" style={{ padding: '0.85rem' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem', fontSize: '0.75rem' }}>
-                <div>Total Orders: <strong>{orders.length}</strong></div>
-                <div>Zones: <strong>{zones.length}</strong></div>
-                <div>Active Riders: <strong>{agents.filter(a => a.status === 'active').length}</strong></div>
-                <div>Completed: <strong>{orders.filter(o => o.status === 'Delivered').length}</strong></div>
-              </div>
-            </div>
-            <div style={{ fontSize: '0.72rem', color: '#fbbf24', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)', padding: '0.6rem', borderRadius: '8px', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
-              <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '2px' }}/>
-              <div>
-                <strong>Simulation Guidelines:</strong> Switch between roles above. As a <strong>Customer</strong>, click the map to select coordinates and book. As an <strong>Admin</strong>, trigger dispatch. As an <strong>Agent</strong>, simulate real-time GPS coordinate step increments.
-              </div>
-            </div>
+          <div className="agent-phone-container">
+            <AgentPortal 
+              agents={agents} orders={orders} onUpdateStatus={handleUpdateStatus} onSimulateGPS={handleSimulateGPS} 
+              currentUser={currentUser} getAuthHeaders={getAuthHeaders}
+            />
           </div>
-        </section>
+        </main>
+      ) : currentUser && currentUser.role === 'customer' ? (
+        <main className="customer-dashboard-layout">
+          <section className="sidebar-left" style={{ padding: '1.25rem' }}>
+            <CustomerPortal 
+              orders={orders} mapClickCoords={mapClickCoords} clearMapClickCoords={() => setMapClickCoords(null)}
+              onCalculateRates={handleCalculateRates} onPlaceOrder={handlePlaceOrder} onRescheduleOrder={handleRescheduleOrder}
+              weather={weather} traffic={traffic} currentUser={currentUser} getAuthHeaders={getAuthHeaders}
+            />
+          </section>
 
-        <section className="sidebar-right notifications-drawer">
-          <NotificationsBar notifications={notifications} onRefresh={loadAllData} />
-        </section>
-      </main>
+          <section className="center-area">
+            <div className="map-container" style={{ height: '100%' }}>
+              <MapComponent 
+                zones={zones} orders={orders} agents={agents}
+                activeSelection={activeSelection} onMapClick={handleMapClick} optimizedRoute={optimizedRoute}
+                selectedOrderId={selectedOrderId}
+              />
+            </div>
+          </section>
+
+          <section className="sidebar-right notifications-drawer">
+            <NotificationsBar notifications={notifications} onRefresh={loadAllData} />
+          </section>
+        </main>
+      ) : (
+        <main className="dashboard-grid admin-dashboard-layout">
+          <section className="sidebar-left" style={{ padding: '1.25rem' }}>
+            <AdminPanel 
+              zones={zones} orders={orders} agents={agents} rates={rates}
+              onAddZone={handleAddZone} onDeleteZone={handleDeleteZone} onUpdateRates={handleUpdateRates}
+              onAutoAssign={handleAutoAssign} onManualAssign={handleManualAssign} onTriggerVRPOptimize={handleTriggerVRPOptimize}
+              mapClickCoords={mapClickCoords} clearMapClickCoords={() => setMapClickCoords(null)}
+              onCalculateRates={handleCalculateRates} onPlaceOrder={handlePlaceOrder} weather={weather} traffic={traffic}
+            />
+          </section>
+
+          <section className="center-area">
+            <div className="map-container" style={{ height: '65%' }}>
+              <MapComponent 
+                zones={zones} orders={orders} agents={agents}
+                activeSelection={activeSelection} onMapClick={handleMapClick} optimizedRoute={optimizedRoute}
+                selectedOrderId={selectedOrderId}
+              />
+            </div>
+            <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                <h3 style={{ fontSize: '0.9rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Shield size={16} color="#6366f1"/> Active System Console
+                </h3>
+              </div>
+              <div className="glass-card" style={{ padding: '0.85rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem', fontSize: '0.75rem' }}>
+                  <div>Total Orders: <strong>{orders.length}</strong></div>
+                  <div>Zones: <strong>{zones.length}</strong></div>
+                  <div>Active Riders: <strong>{agents.filter(a => a.status === 'active').length}</strong></div>
+                  <div>Completed: <strong>{orders.filter(o => o.status === 'Delivered').length}</strong></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="sidebar-right notifications-drawer">
+            <NotificationsBar notifications={notifications} onRefresh={loadAllData} />
+          </section>
+        </main>
+      )}
 
       <footer className="control-bar">
         <div className="control-bar-item">
