@@ -793,10 +793,28 @@ function CustomerPortal({ orders, mapClickCoords, clearMapClickCoords, onCalcula
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [selectedRescheduleSlot, setSelectedRescheduleSlot] = useState('');
   const [rescheduleSlots, setRescheduleSlots] = useState([]);
+  const [orderDetail, setOrderDetail] = useState(null); // full order with history
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [bookingSuccess, setBookingSuccess] = useState(null); // holds last placed order
+
+  // Fetch full order detail (with history) whenever selectedOrderId changes
+  useEffect(() => {
+    if (!selectedOrderId) { setOrderDetail(null); return; }
+    setLoadingDetail(true);
+    const token = localStorage.getItem('lastmile_token');
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    fetch(`/api/orders/${selectedOrderId}`, { headers })
+      .then(r => r.json())
+      .then(data => { if (data && data.id) setOrderDetail(data); })
+      .catch(console.error)
+      .finally(() => setLoadingDetail(false));
+  }, [selectedOrderId]);
 
   useEffect(() => {
     if (rescheduleDate && selectedOrderId) {
-      fetch(`/api/orders/${selectedOrderId}/reschedule-slots?date=${rescheduleDate}`)
+      const token = localStorage.getItem('lastmile_token');
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+      fetch(`/api/orders/${selectedOrderId}/reschedule-slots?date=${rescheduleDate}`, { headers })
         .then(res => res.json())
         .then(data => {
           if (data && Array.isArray(data.slots)) {
@@ -851,7 +869,7 @@ function CustomerPortal({ orders, mapClickCoords, clearMapClickCoords, onCalcula
       order_type: orderType, payment_type: paymentType, weather, traffic
     });
     if (order) {
-      alert(`Booking confirmed! Order ID: #${order.id}`);
+      setBookingSuccess(order);
       setPickupAddr(''); setPickupLat(''); setPickupLng('');
       setDropAddr(''); setDropLat(''); setDropLng('');
       setPricingBreakdown(null);
@@ -866,9 +884,24 @@ function CustomerPortal({ orders, mapClickCoords, clearMapClickCoords, onCalcula
     await onRescheduleOrder(selectedOrderId, rescheduleDate, selectedRescheduleSlot);
     setRescheduleDate('');
     setSelectedRescheduleSlot('');
+    // Refresh order detail after reschedule
+    const token = localStorage.getItem('lastmile_token');
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    fetch(`/api/orders/${selectedOrderId}`, { headers })
+      .then(r => r.json())
+      .then(data => { if (data && data.id) setOrderDetail(data); });
   };
 
-  const selectedOrder = orders.find(o => o.id === selectedOrderId);
+  const selectedOrder = orderDetail; // always use full detail with history
+
+  const STATUS_COLORS = {
+    'Created': '#3b82f6', 'Assigned': '#8b5cf6', 'Picked Up': '#f59e0b',
+     'In Transit': '#06b6d4', 'Out for Delivery': '#ec4899', 'Delivered': '#10b981', 'Failed': '#ef4444'
+  };
+  const STATUS_ICONS = {
+    'Created': '📦', 'Assigned': '🏍️', 'Picked Up': '📤',
+    'In Transit': '🚚', 'Out for Delivery': '📍', 'Delivered': '✅', 'Failed': '❌'
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -967,16 +1000,100 @@ function CustomerPortal({ orders, mapClickCoords, clearMapClickCoords, onCalcula
 
         {activeSubTab === 'track' && (
           <div>
-            <div className="form-group">
-              <label className="form-label">Active Orders</label>
-              <select className="form-input" value={selectedOrderId || ''} onChange={e => setSelectedOrderId(parseInt(e.target.value))}>
-                <option value="">-- Choose Placed Order --</option>
-                {orders.map(o => <option key={o.id} value={o.id}>Order #{o.id} - {o.pickup_address.substring(0, 10)}... ({o.status})</option>)}
-              </select>
+            {/* Post-booking success banner */}
+            {bookingSuccess && (
+              <div style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: '10px', padding: '1rem', marginBottom: '1rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>🎉</div>
+                <div style={{ fontWeight: 700, color: '#34d399', fontSize: '0.85rem' }}>Order #{bookingSuccess.id} Confirmed!</div>
+                <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.25rem' }}>Total: <strong style={{ color: '#fff' }}>${bookingSuccess.total_charge?.toFixed(2)}</strong> · {bookingSuccess.order_type} · {bookingSuccess.payment_type}</div>
+                <div style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: '0.5rem' }}>A rider will be auto-assigned shortly.</div>
+                <button onClick={() => setBookingSuccess(null)} style={{ marginTop: '0.5rem', fontSize: '0.65rem', background: 'transparent', border: '1px solid rgba(16,185,129,0.3)', color: '#34d399', borderRadius: '6px', padding: '0.25rem 0.75rem', cursor: 'pointer' }}>Dismiss</button>
+              </div>
+            )}
+
+            {/* Order selector */}
+            <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                <ShoppingBag size={13} color="#6366f1" /> Your Orders
+              </label>
+              {orders.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '2rem 1rem', color: '#94a3b8', fontSize: '0.8rem' }}>
+                  <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📭</div>
+                  No orders yet. Place your first booking!
+                  <br/><button onClick={() => setActiveSubTab('book')} style={{ marginTop: '0.75rem', fontSize: '0.75rem', background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: '#a5b4fc', borderRadius: '8px', padding: '0.4rem 1rem', cursor: 'pointer' }}>📦 Book a Courier</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {orders.map(o => {
+                    const color = STATUS_COLORS[o.status] || '#94a3b8';
+                    const icon = STATUS_ICONS[o.status] || '📦';
+                    const isSelected = selectedOrderId === o.id;
+                    return (
+                      <div
+                        key={o.id}
+                        onClick={() => setSelectedOrderId(o.id)}
+                        style={{
+                          background: isSelected ? 'rgba(99,102,241,0.12)' : 'rgba(255,255,255,0.03)',
+                          border: `1px solid ${isSelected ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.06)'}`,
+                          borderRadius: '8px', padding: '0.65rem 0.75rem', cursor: 'pointer',
+                          transition: 'all 0.15s ease', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#e2e8f0' }}>Order #{o.id}</div>
+                          <div style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.1rem', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {o.pickup_address} → {o.drop_address}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color, display: 'flex', alignItems: 'center', gap: '0.25rem', justifyContent: 'flex-end' }}>
+                            {icon} {o.status}
+                          </div>
+                          <div style={{ fontSize: '0.6rem', color: '#6b7280', marginTop: '0.1rem' }}>${o.total_charge?.toFixed(2)}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
-            {selectedOrder && (
+            {/* Selected order detail */}
+            {loadingDetail && (
+              <div style={{ textAlign: 'center', padding: '1.5rem', color: '#94a3b8', fontSize: '0.8rem' }}>
+                <div style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>⏳</div> Loading order details...
+              </div>
+            )}
+
+            {selectedOrder && !loadingDetail && (
               <div>
+                {/* Status card */}
+                <div className="glass-card" style={{ background: `rgba(${selectedOrder.status === 'Delivered' ? '16,185,129' : selectedOrder.status === 'Failed' ? '239,68,68' : '99,102,241'},0.08)`, borderColor: `${STATUS_COLORS[selectedOrder.status] || '#6366f1'}44`, marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.25rem' }}>ORDER #{selectedOrder.id}</div>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 800, color: STATUS_COLORS[selectedOrder.status] || '#fff' }}>
+                        {STATUS_ICONS[selectedOrder.status]} {selectedOrder.status}
+                      </div>
+                      {selectedOrder.agent_name && (
+                        <div style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.25rem' }}>🏍️ Rider: <strong style={{ color: '#e2e8f0' }}>{selectedOrder.agent_name}</strong></div>
+                      )}
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{selectedOrder.order_type} · {selectedOrder.payment_type}</div>
+                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#10b981', marginTop: '0.25rem' }}>${selectedOrder.total_charge?.toFixed(2)}</div>
+                      {selectedOrder.discount_applied ? <div style={{ fontSize: '0.6rem', color: '#34d399' }}>🌱 10% co-routing discount applied</div> : null}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '0.75rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.65rem', color: '#94a3b8' }}>
+                    <div><span style={{ color: '#6b7280' }}>📤 From:</span><br/><span style={{ color: '#e2e8f0' }}>{selectedOrder.pickup_address}</span></div>
+                    <div><span style={{ color: '#6b7280' }}>📍 To:</span><br/><span style={{ color: '#e2e8f0' }}>{selectedOrder.drop_address}</span></div>
+                    <div>Weight: <strong style={{ color: '#e2e8f0' }}>{selectedOrder.billing_weight} kg</strong></div>
+                    <div>Placed: <strong style={{ color: '#e2e8f0' }}>{new Date(selectedOrder.created_at).toLocaleDateString()}</strong></div>
+                  </div>
+                </div>
+
+                {/* Reschedule section for Failed orders */}
                 {selectedOrder.status === 'Failed' && (
                   <div className="glass-card" style={{ background: 'rgba(239,68,68,0.06)', borderColor: 'rgba(239,68,68,0.2)' }}>
                     <h3 className="card-title" style={{ color: '#f87171' }}><AlertTriangle size={16}/> Reschedule Failed Attempt</h3>
@@ -1022,23 +1139,28 @@ function CustomerPortal({ orders, mapClickCoords, clearMapClickCoords, onCalcula
                   </div>
                 )}
 
+                {/* Immutable Audit Trail / Timeline */}
                 <div className="glass-card">
                   <h3 className="card-title"><ShoppingBag size={16} color="#6366f1"/> Immutable Audit Trail</h3>
                   <div className="timeline">
-                    {selectedOrder.history && selectedOrder.history.map((log, index) => (
-                      <div key={log.id} className="timeline-item">
-                        <div className={`timeline-dot ${index === selectedOrder.history.length - 1 ? 'active' : ''}`} />
-                        <div className="timeline-content">
-                          <div className="timeline-title">{log.to_status}</div>
-                          <div style={{ fontSize: '0.72rem', color: '#cbd5e1' }}>{log.remarks}</div>
-                          <div className="timeline-time">By: {log.updated_by_username} | {new Date(log.timestamp).toLocaleTimeString()}</div>
+                    {selectedOrder.history && selectedOrder.history.length > 0 ? (
+                      selectedOrder.history.map((log, index) => (
+                        <div key={log.id} className="timeline-item">
+                          <div className={`timeline-dot ${index === selectedOrder.history.length - 1 ? 'active' : ''}`} />
+                          <div className="timeline-content">
+                            <div className="timeline-title">{log.to_status}</div>
+                            <div style={{ fontSize: '0.72rem', color: '#cbd5e1' }}>{log.remarks}</div>
+                            <div className="timeline-time">By: {log.updated_by_username} | {new Date(log.timestamp).toLocaleTimeString()}</div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))
+                    ) : (
+                      <div style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center', padding: '0.75rem' }}>No history events yet.</div>
+                    )}
                   </div>
                 </div>
 
-                {/* Interactive Live Chat */}
+                {/* Live chat (only when a rider is active) */}
                 {['Assigned', 'Picked Up', 'In Transit', 'Out for Delivery'].includes(selectedOrder.status) && (
                   <div className="glass-card" style={{ padding: '0.75rem' }}>
                     <ChatPanel orderId={selectedOrder.id} currentUser={currentUser} getAuthHeaders={getAuthHeaders} />
