@@ -2,7 +2,32 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 // Import services from consolidated server
-const { getDistanceKM, verifyGeofence, calculateVolumetricWeight, optimizeRoute } = require('../server');
+const { getDistanceKM, verifyGeofence, calculateVolumetricWeight, optimizeRoute, calculateOrderCharge, detectZone, initDB } = require('../server');
+
+test('Database Setup Initialization', async () => {
+  await initDB();
+  assert.ok(true, 'Database schemas should initialize correctly');
+});
+
+test('Pricing Engine - Core SLA Rate Card Calculation', async () => {
+  // Mock order details
+  const details = {
+    pickup_lat: 40.7589, pickup_lng: -73.9851, // inside Manhattan Core
+    drop_lat: 40.7589, drop_lng: -73.9851,     // inside Manhattan Core (Intra-Zone)
+    dimensions: '30x20x15',                    // 1.8kg volumetric weight
+    actual_weight: 1.0,                        // base weight limit is 2.0kg for B2C
+    order_type: 'B2C',
+    payment_type: 'Prepaid',
+    weather: 'Sunny',
+    traffic: 'Light'
+  };
+
+  const pricing = await calculateOrderCharge(details);
+  
+  // Base B2C rate is $15.00. Since actual & volumetric weight (1.8kg) is less than base limit (2.0kg),
+  // no incremental weight charge applies. Total charge should be exactly base rate ($15.00).
+  assert.strictEqual(pricing.total_charge, 15.00);
+});
 
 test('Geospatial Math - Distance Calculations', () => {
   // Distance from Times Square to Central Park (approx 2.0 - 2.5 km)
@@ -46,4 +71,28 @@ test('Routing Solver - Nearest Neighbor with 2-Opt Optimization', () => {
   assert.strictEqual(result.path.length, 4);
   assert.ok(result.totalDistanceKM > 0);
   assert.strictEqual(result.path[0].label, 'Start (Agent)');
+});
+
+test('Geospatial Zone Detection - Closest Center Match', async () => {
+  // Test detection of overlapping circular zones
+  // We assume default Manhattan Core is center (40.7589, -73.9851)
+  // Let's check a point directly inside it
+  const zone = await detectZone(40.7589, -73.9851);
+  assert.ok(zone !== null);
+  assert.strictEqual(zone.name, 'Manhattan Core');
+});
+
+test('Pricing Engine - Volumetric vs Actual Weight Choice', async () => {
+  // Sizing 50x40x30 / 5000 = 12.0kg volumetric weight
+  // Actual weight 5.0kg -> Billing weight should be 12.0kg
+  const details = {
+    pickup_lat: 40.7589, pickup_lng: -73.9851,
+    drop_lat: 40.7589, drop_lng: -73.9851,
+    dimensions: '50x40x30',
+    actual_weight: 5.0,
+    order_type: 'B2C',
+    payment_type: 'Prepaid'
+  };
+  const pricing = await calculateOrderCharge(details);
+  assert.strictEqual(pricing.billing_weight, 12.0);
 });

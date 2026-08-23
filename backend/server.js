@@ -951,8 +951,19 @@ app.post('/api/routing/optimize', async (req, res) => {
 
 // Logistics & Notifications Utilities
 app.get('/api/agents', async (req, res) => {
-  const list = await all('SELECT id, username, current_lat, current_lng, rating, points, status FROM users WHERE role = \'agent\'');
-  res.json(list);
+  try {
+    const list = await all('SELECT id, username, current_lat, current_lng, rating, points, status FROM users WHERE role = \'agent\'');
+    const enriched = await Promise.all(list.map(async agent => {
+      const activeObj = await get("SELECT COUNT(*) as count FROM orders WHERE agent_id = ? AND status NOT IN ('Delivered', 'Failed')", [agent.id]);
+      return {
+        ...agent,
+        active_jobs: activeObj ? activeObj.count : 0
+      };
+    }));
+    res.json(enriched);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/notifications', async (req, res) => {
@@ -1066,6 +1077,7 @@ module.exports = {
   optimizeRoute,
   calculateOrderCharge,
   autoAssignAgent,
+  detectZone,
   initDB
 };
 
