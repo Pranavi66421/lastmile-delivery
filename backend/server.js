@@ -6,11 +6,23 @@ const path = require('path');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'lastmile_jwt_secret_change_in_prod_2026';
+const JWT_EXPIRY = '12h';
 
 // Password Hashing Helper using native pbkdf2
 function hashPassword(password) {
   const salt = 'think_lastmile_salt_123';
   return crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+}
+
+function signToken(user) {
+  return jwt.sign(
+    { id: user.id, username: user.username, role: user.role },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRY }
+  );
 }
 
 const app = express();
@@ -610,34 +622,58 @@ async function triggerOrderStatusNotifications(order, newStatus, remarks = '') {
 // ==========================================
 // 7. REST MIDDLEWARES & API ROUTING
 // ==========================================
+
+// JWT Auth Middleware — reads Bearer token from Authorization header
 const authMiddleware = (req, res, next) => {
-  const userId = req.headers['x-user-id'];
-  const role = req.headers['x-role'];
-  const username = req.headers['x-username'];
-  req.user = userId ? { id: parseInt(userId), role, username } : null;
+  const header = req.headers['authorization'];
+  if (!header || !header.startsWith('Bearer ')) {
+    req.user = null;
+    return next();
+  }
+  const token = header.slice(7);
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = { id: decoded.id, username: decoded.username, role: decoded.role };
+  } catch (e) {
+    req.user = null;
+  }
+  next();
+};
+
+// Role guard factory — call requireRole('admin') or requireRole('admin','agent') etc.
+const requireAuth = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ error: 'Authentication required. Please log in.' });
+  next();
+};
+
+const requireRole = (...roles) => (req, res, next) => {
+  if (!req.user) return res.status(401).json({ error: 'Authentication required.' });
+  if (!roles.includes(req.user.role)) {
+    return res.status(403).json({ error: `Access denied. Required role: ${roles.join(' or ')}.` });
+  }
   next();
 };
 
 app.use(authMiddleware);
 
-// User Auth Endpoints
-app.post('/api/auth/register', async (req, res) => {
-  const { username, password, role, email, phone } = req.body;
-  if (!username || !password || !role) return res.status(400).json({ error: 'Missing requirements' });
-  try {
-    const existing = await get('SELECT * FROM users WHERE username = ?', [username]);
-    if (existing) return res.status(400).json({ error: 'Username exists' });
+// ---- AUTH ENDPOINTS ----
 
-    let lat = null, lng = null;
-    if (role === 'agent') {
-      lat = 40.75 + (Math.random() - 0.5) * 0.05;
-      lng = -73.98 + (Math.random() - 0.5) * 0.05;
-    }
+// Public registration: only customers can self-register.
+// Agents and admins are provisioned by an admin.
+app.post('/api/auth/register', async (req, res) => {
+  const { username, password, email, phone } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password are required.' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  try {
+    const existing = await get('SELECT id FROM users WHERE username = ?', [username]);
+    if (existing) return res.status(409).json({ error: 'Username already taken.' });
     const result = await run(
-      'INSERT INTO users (username, password, role, email, phone, current_lat, current_lng) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [username, hashPassword(password), role, email, phone, lat, lng]
+      'INSERT INTO users (username, password, role, email, phone) VALUES (?, ?, \'customer\', ?, ?)',
+      [username.trim().toLowerCase(), hashPassword(password), email || null, phone || null]
     );
-    res.status(201).json({ id: result.id, username, role, email, phone, current_lat: lat, current_lng: lng, rating: 5.0, points: 0 });
+    const newUser = { id: result.id, username, role: 'customer', email, phone, rating: 5.0, points: 0 };
+    const token = signToken(newUser);
+    res.status(201).json({ token, user: newUser });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -645,60 +681,119 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password are required.' });
   try {
-    const user = await get('SELECT id, username, password, role, email, phone, current_lat, current_lng, rating, points FROM users WHERE username = ?', [username]);
-    if (!user || user.password !== hashPassword(password)) return res.status(401).json({ error: 'Invalid credentials' });
-    delete user.password;
+    const user = await get(
+      'SELECT id, username, password, role, email, phone, current_lat, current_lng, rating, points, status FROM users WHERE username = ?',
+      [username.trim().toLowerCase()]
+    );
+    if (!user || user.password !== hashPassword(password)) {
+      return res.status(401).json({ error: 'Invalid username or password.' });
+    }
+    if (user.status === 'inactive') {
+      return res.status(403).json({ error: 'Your account has been deactivated. Contact support.' });
+    }
+    const payload = { id: user.id, username: user.username, role: user.role, email: user.email, phone: user.phone, current_lat: user.current_lat, current_lng: user.current_lng, rating: user.rating, points: user.points };
+    const token = signToken(payload);
+    res.json({ token, user: payload });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  try {
+    const user = await get(
+      'SELECT id, username, role, email, phone, current_lat, current_lng, rating, points FROM users WHERE id = ?',
+      [req.user.id]
+    );
+    if (!user) return res.status(404).json({ error: 'User not found.' });
     res.json(user);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/api/auth/me', async (req, res) => {
-  if (!req.user) return res.status(401).json({ error: 'Not logged in' });
+// Admin-only: provision an agent or admin account
+app.post('/api/admin/users', requireRole('admin'), async (req, res) => {
+  const { username, password, role, email, phone } = req.body;
+  if (!username || !password || !['agent', 'admin'].includes(role)) {
+    return res.status(400).json({ error: 'username, password, and role (agent|admin) are required.' });
+  }
   try {
-    const user = await get('SELECT id, username, role, email, phone, current_lat, current_lng, rating, points FROM users WHERE id = ?', [req.user.id]);
-    res.json(user);
+    const existing = await get('SELECT id FROM users WHERE username = ?', [username]);
+    if (existing) return res.status(409).json({ error: 'Username already taken.' });
+    let lat = null, lng = null;
+    if (role === 'agent') {
+      lat = 40.75 + (Math.random() - 0.5) * 0.05;
+      lng = -73.98 + (Math.random() - 0.5) * 0.05;
+    }
+    const result = await run(
+      'INSERT INTO users (username, password, role, email, phone, current_lat, current_lng) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [username, hashPassword(password), role, email || null, phone || null, lat, lng]
+    );
+    res.status(201).json({ id: result.id, username, role, email, phone, current_lat: lat, current_lng: lng });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Zones Endpoints
-app.get('/api/zones', async (req, res) => {
-  const zones = await all('SELECT * FROM zones');
-  res.json(zones);
+// ---- ZONE ENDPOINTS (admin-only writes, authenticated reads) ----
+app.get('/api/zones', requireAuth, async (req, res) => {
+  try {
+    const zones = await all('SELECT * FROM zones');
+    res.json(zones);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/zones', async (req, res) => {
+app.post('/api/zones', requireRole('admin'), async (req, res) => {
   const { name, center_lat, center_lng, radius_km } = req.body;
+  if (!name || !center_lat || !center_lng || !radius_km) {
+    return res.status(400).json({ error: 'All zone fields are required.' });
+  }
   try {
-    const result = await run('INSERT INTO zones (name, center_lat, center_lng, radius_km) VALUES (?, ?, ?, ?)', [name, parseFloat(center_lat), parseFloat(center_lng), parseFloat(radius_km)]);
+    const result = await run(
+      'INSERT INTO zones (name, center_lat, center_lng, radius_km) VALUES (?, ?, ?, ?)',
+      [name, parseFloat(center_lat), parseFloat(center_lng), parseFloat(radius_km)]
+    );
     res.status(201).json({ id: result.id, name, center_lat, center_lng, radius_km });
   } catch (err) {
-    res.status(500).json({ error: 'Zone must have a unique name' });
+    res.status(500).json({ error: 'Zone name must be unique.' });
   }
 });
 
-app.delete('/api/zones/:id', async (req, res) => {
-  await run('DELETE FROM zones WHERE id = ?', [req.params.id]);
-  res.json({ success: true });
+app.delete('/api/zones/:id', requireRole('admin'), async (req, res) => {
+  try {
+    await run('DELETE FROM zones WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Rates Endpoints
-app.get('/api/rates', async (req, res) => {
-  const rates = await all('SELECT * FROM rate_cards');
-  res.json(rates);
+// ---- RATE CARD ENDPOINTS (admin-only writes) ----
+app.get('/api/rates', requireAuth, async (req, res) => {
+  try {
+    const rates = await all('SELECT * FROM rate_cards');
+    res.json(rates);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.put('/api/rates/:id', async (req, res) => {
+app.put('/api/rates/:id', requireRole('admin'), async (req, res) => {
   const { base_weight_kg, base_rate, intra_zone_rate_per_kg, inter_zone_rate_per_kg, cod_surcharge_flat } = req.body;
-  await run(
-    'UPDATE rate_cards SET base_weight_kg = ?, base_rate = ?, intra_zone_rate_per_kg = ?, inter_zone_rate_per_kg = ?, cod_surcharge_flat = ? WHERE id = ?',
-    [parseFloat(base_weight_kg), parseFloat(base_rate), parseFloat(intra_zone_rate_per_kg), parseFloat(inter_zone_rate_per_kg), parseFloat(cod_surcharge_flat), req.params.id]
-  );
-  res.json({ success: true });
+  try {
+    await run(
+      'UPDATE rate_cards SET base_weight_kg = ?, base_rate = ?, intra_zone_rate_per_kg = ?, inter_zone_rate_per_kg = ?, cod_surcharge_flat = ? WHERE id = ?',
+      [parseFloat(base_weight_kg), parseFloat(base_rate), parseFloat(intra_zone_rate_per_kg), parseFloat(inter_zone_rate_per_kg), parseFloat(cod_surcharge_flat), req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Orders Endpoints
@@ -767,27 +862,51 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-app.get('/api/orders', async (req, res) => {
-  if (!req.user) return res.status(401).json({ error: 'Auth required' });
-  let list;
-  if (req.user.role === 'customer') {
-    list = await all('SELECT * FROM orders WHERE customer_id = ? ORDER BY id DESC', [req.user.id]);
-  } else if (req.user.role === 'agent') {
-    list = await all('SELECT * FROM orders WHERE agent_id = ? ORDER BY id DESC', [req.user.id]);
-  } else {
-    list = await all('SELECT * FROM orders ORDER BY id DESC');
+// ---- ORDER ENDPOINTS ----
+app.get('/api/orders', requireAuth, async (req, res) => {
+  try {
+    let list;
+    if (req.user.role === 'customer') {
+      list = await all(
+        `SELECT o.*, oh.to_status as latest_status FROM orders o
+         LEFT JOIN (SELECT order_id, MAX(id) as max_id FROM order_history GROUP BY order_id) lh ON o.id = lh.order_id
+         LEFT JOIN order_history oh ON oh.id = lh.max_id
+         WHERE o.customer_id = ? ORDER BY o.id DESC`,
+        [req.user.id]
+      );
+    } else if (req.user.role === 'agent') {
+      list = await all('SELECT * FROM orders WHERE agent_id = ? ORDER BY id DESC', [req.user.id]);
+    } else if (req.user.role === 'admin') {
+      list = await all('SELECT * FROM orders ORDER BY id DESC');
+    } else {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.json(list);
 });
 
-app.get('/api/orders/:id', async (req, res) => {
-  const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-  const history = await all('SELECT * FROM order_history WHERE order_id = ? ORDER BY id ASC', [req.params.id]);
-  res.json({ ...order, history });
+app.get('/api/orders/:id', requireAuth, async (req, res) => {
+  try {
+    const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    // Ownership check: customers can only see their own orders
+    if (req.user.role === 'customer' && order.customer_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied. This is not your order.' });
+    }
+    // Agents can only see orders assigned to them
+    if (req.user.role === 'agent' && order.agent_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied. This order is not assigned to you.' });
+    }
+    const history = await all('SELECT * FROM order_history WHERE order_id = ? ORDER BY id ASC', [req.params.id]);
+    res.json({ ...order, history });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/orders/:id/assign', async (req, res) => {
+app.post('/api/orders/:id/assign', requireRole('admin'), async (req, res) => {
   const { agent_id } = req.body;
   try {
     const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
@@ -796,10 +915,7 @@ app.post('/api/orders/:id/assign', async (req, res) => {
 
     const fromStatus = order.status;
     await run('UPDATE orders SET agent_id = ?, agent_name = ?, status = \'Assigned\' WHERE id = ?', [agent.id, agent.username, order.id]);
-    
-    const actorId = req.user ? req.user.id : 1;
-    const actorName = req.user ? req.user.username : 'admin';
-    await run('INSERT INTO order_history (order_id, from_status, to_status, updated_by_id, updated_by_username, remarks) VALUES (?, ?, \'Assigned\', ?, ?, ?)', [order.id, fromStatus, actorId, actorName, `Manual courier dispatch: ${agent.username}`]);
+    await run('INSERT INTO order_history (order_id, from_status, to_status, updated_by_id, updated_by_username, remarks) VALUES (?, ?, \'Assigned\', ?, ?, ?)', [order.id, fromStatus, req.user.id, req.user.username, `Manual courier dispatch: ${agent.username}`]);
 
     const updated = await get('SELECT o.*, u.email as customer_email, u.phone as customer_phone, a.rating as agent_rating FROM orders o JOIN users u ON o.customer_id = u.id JOIN users a ON o.agent_id = a.id WHERE o.id = ?', [order.id]);
     await triggerOrderStatusNotifications(updated, 'Assigned');
@@ -809,7 +925,7 @@ app.post('/api/orders/:id/assign', async (req, res) => {
   }
 });
 
-app.post('/api/orders/:id/auto-assign', async (req, res) => {
+app.post('/api/orders/:id/auto-assign', requireRole('admin'), async (req, res) => {
   try {
     const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
     if (!order) return res.status(404).json({ error: 'Order not found' });
@@ -832,15 +948,22 @@ app.post('/api/orders/:id/auto-assign', async (req, res) => {
   }
 });
 
-app.post('/api/orders/:id/status', async (req, res) => {
+app.post('/api/orders/:id/status', requireRole('agent', 'admin'), async (req, res) => {
   const { status, remarks } = req.body;
+  const VALID_STATUSES = ['Assigned', 'Picked Up', 'In Transit', 'Out for Delivery', 'Delivered', 'Failed'];
+  if (!VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
+  }
   try {
     const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
     if (!order) return res.status(404).json({ error: 'Order not found' });
+    // Agents can only update orders assigned to them
+    if (req.user.role === 'agent' && order.agent_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied. This order is not assigned to you.' });
+    }
     const fromStatus = order.status;
-
-    const actorId = req.user ? req.user.id : (order.agent_id || 1);
-    const actorName = req.user ? req.user.username : (order.agent_name || 'agent');
+    const actorId = req.user.id;
+    const actorName = req.user.username;
 
     // Geofencing checks
     if (status === 'Delivered') {
@@ -870,14 +993,17 @@ app.post('/api/orders/:id/status', async (req, res) => {
   }
 });
 
-// Reschedule Slots Efficiency Lookup Endpoint
-app.get('/api/orders/:id/reschedule-slots', async (req, res) => {
+// Reschedule Slots Efficiency Lookup (customer can only look up their own order)
+app.get('/api/orders/:id/reschedule-slots', requireAuth, async (req, res) => {
   const { date } = req.query;
   if (!date) return res.status(400).json({ error: 'Date parameter required' });
   
   try {
     const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
     if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (req.user.role === 'customer' && order.customer_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
     
     const zoneId = order.pickup_zone_id || order.drop_zone_id;
     let count = 0;
@@ -908,11 +1034,15 @@ app.get('/api/orders/:id/reschedule-slots', async (req, res) => {
   }
 });
 
-app.post('/api/orders/:id/reschedule', async (req, res) => {
+app.post('/api/orders/:id/reschedule', requireAuth, async (req, res) => {
   const { reschedule_date, reschedule_slot } = req.body;
   try {
     const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
-    if (!order || order.status !== 'Failed') return res.status(400).json({ error: 'Order must be in failed state to reschedule' });
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    if (req.user.role === 'customer' && order.customer_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
+    if (order.status !== 'Failed') return res.status(400).json({ error: 'Order must be in Failed state to reschedule.' });
 
     const fromStatus = order.status;
     const actorId = req.user ? req.user.id : order.customer_id;
@@ -964,8 +1094,8 @@ app.post('/api/orders/:id/reschedule', async (req, res) => {
   }
 });
 
-// Routing Optimization Endpoint
-app.post('/api/routing/optimize', async (req, res) => {
+// Routing Optimization Endpoint (admin only)
+app.post('/api/routing/optimize', requireRole('admin'), async (req, res) => {
   const { agent_id, order_ids } = req.body;
   try {
     const agent = await get('SELECT id, username, current_lat, current_lng FROM users WHERE id = ?', [agent_id]);
@@ -989,7 +1119,7 @@ app.post('/api/routing/optimize', async (req, res) => {
 });
 
 // Logistics & Notifications Utilities
-app.get('/api/agents', async (req, res) => {
+app.get('/api/agents', requireAuth, async (req, res) => {
   try {
     const list = await all('SELECT id, username, current_lat, current_lng, rating, points, status FROM users WHERE role = \'agent\'');
     const enriched = await Promise.all(list.map(async agent => {
@@ -1005,12 +1135,16 @@ app.get('/api/agents', async (req, res) => {
   }
 });
 
-app.get('/api/notifications', async (req, res) => {
-  const logs = await all('SELECT * FROM notification_logs ORDER BY id DESC LIMIT 40');
-  res.json(logs);
+app.get('/api/notifications', requireRole('admin'), async (req, res) => {
+  try {
+    const logs = await all('SELECT * FROM notification_logs ORDER BY id DESC LIMIT 40');
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/customers', async (req, res) => {
+app.get('/api/customers', requireRole('admin'), async (req, res) => {
   try {
     const list = await all('SELECT id, username, email, phone FROM users WHERE role = \'customer\'');
     res.json(list);
@@ -1019,8 +1153,17 @@ app.get('/api/customers', async (req, res) => {
   }
 });
 
-app.get('/api/orders/:id/messages', async (req, res) => {
+app.get('/api/orders/:id/messages', requireAuth, async (req, res) => {
   try {
+    // Ownership check
+    const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    if (req.user.role === 'customer' && order.customer_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
+    if (req.user.role === 'agent' && order.agent_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
     const list = await all('SELECT * FROM chat_messages WHERE order_id = ? ORDER BY id ASC', [req.params.id]);
     res.json(list);
   } catch (err) {
@@ -1060,8 +1203,8 @@ app.post('/api/orders/:id/messages', async (req, res) => {
   }
 });
 
-// Reset Simulation Endpoint
-app.post('/api/simulation/reset', async (req, res) => {
+// Reset Simulation Endpoint (admin only)
+app.post('/api/simulation/reset', requireRole('admin'), async (req, res) => {
   try {
     await run('DROP TABLE IF EXISTS users');
     await run('DROP TABLE IF EXISTS zones');
@@ -1078,9 +1221,11 @@ app.post('/api/simulation/reset', async (req, res) => {
   }
 });
 
-// Update agent coordinates during simulation drive
-app.post('/api/simulation/agent-gps', async (req, res) => {
-  const { agent_id, lat, lng } = req.body;
+// Update agent coordinates during simulation drive (agent can only update their own GPS)
+app.post('/api/simulation/agent-gps', requireRole('agent', 'admin'), async (req, res) => {
+  // Agents can only update their own GPS; admins can update any
+  const agent_id = req.user.role === 'admin' ? (req.body.agent_id || req.user.id) : req.user.id;
+  const { lat, lng } = req.body;
   try {
     await run('UPDATE users SET current_lat = ?, current_lng = ? WHERE id = ?', [lat, lng, agent_id]);
     

@@ -60,17 +60,18 @@ function AuthOverlay({ onLoginSuccess }) {
   const [isRegister, setIsRegister] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('customer');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg('');
+    setLoading(true);
     const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
     const payload = isRegister 
-      ? { username, password, role, email, phone }
+      ? { username, password, email, phone }
       : { username, password };
       
     try {
@@ -86,7 +87,9 @@ function AuthOverlay({ onLoginSuccess }) {
         setErrorMsg(data.error || 'Authentication failed');
       }
     } catch (err) {
-      setErrorMsg('Server connection failed.');
+      setErrorMsg('Server connection failed. Is the backend running?');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -98,7 +101,7 @@ function AuthOverlay({ onLoginSuccess }) {
             <Truck size={32} color="#6366f1" />
           </div>
           <h2 className="auth-title">Think Last-Mile</h2>
-          <p className="auth-subtitle">Logistics Routing & Dispatch Platform</p>
+          <p className="auth-subtitle">Logistics Routing &amp; Dispatch Platform</p>
         </div>
         {errorMsg && (
           <div style={{ color: '#ef4444', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', padding: '0.5rem', borderRadius: '6px', fontSize: '0.75rem', marginBottom: '1rem', textAlign: 'center' }}>
@@ -108,40 +111,37 @@ function AuthOverlay({ onLoginSuccess }) {
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label className="form-label">Username</label>
-            <input type="text" className="form-input" value={username} onChange={e => setUsername(e.target.value)} required />
+            <input type="text" className="form-input" value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username" />
           </div>
           <div className="form-group">
             <label className="form-label">Password</label>
-            <input type="password" className="form-input" value={password} onChange={e => setPassword(e.target.value)} required />
+            <input type="password" className="form-input" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" />
           </div>
           {isRegister && (
             <>
               <div className="form-group">
-                <label className="form-label">Role</label>
-                <select className="form-input" value={role} onChange={e => setRole(e.target.value)}>
-                  <option value="customer">Customer</option>
-                  <option value="agent">Delivery Courier</option>
-                </select>
-              </div>
-              <div className="form-group">
                 <label className="form-label">Email</label>
-                <input type="email" className="form-input" value={email} onChange={e => setEmail(e.target.value)} required />
+                <input type="email" className="form-input" value={email} onChange={e => setEmail(e.target.value)} />
               </div>
               <div className="form-group">
                 <label className="form-label">Phone Number</label>
-                <input type="tel" className="form-input" placeholder="+15550000" value={phone} onChange={e => setPhone(e.target.value)} required />
+                <input type="tel" className="form-input" placeholder="+15550000" value={phone} onChange={e => setPhone(e.target.value)} />
+              </div>
+              <div style={{ fontSize: '0.7rem', color: '#94a3b8', padding: '0.4rem 0', marginBottom: '0.5rem', lineHeight: 1.5 }}>
+                🔒 Self-registration creates a <strong>Customer</strong> account only.
+                Agents and Admins are provisioned by system administrators.
               </div>
             </>
           )}
-          <button type="submit" className="btn btn-accent" style={{ marginTop: '1rem' }}>
-            {isRegister ? 'Register Account' : 'Sign In'}
+          <button type="submit" className="btn btn-accent" style={{ marginTop: '1rem' }} disabled={loading}>
+            {loading ? 'Please wait...' : (isRegister ? 'Create Account' : 'Sign In')}
           </button>
         </form>
         <div className="auth-toggle">
           {isRegister ? (
             <span>Already have an account? <span className="auth-toggle-link" onClick={() => { setIsRegister(false); setErrorMsg(''); }}>Sign In</span></span>
           ) : (
-            <span>New user? <span className="auth-toggle-link" onClick={() => { setIsRegister(true); setErrorMsg(''); }}>Register here</span></span>
+            <span>New customer? <span className="auth-toggle-link" onClick={() => { setIsRegister(true); setErrorMsg(''); }}>Register here</span></span>
           )}
         </div>
       </div>
@@ -155,7 +155,9 @@ function ChatPanel({ orderId, currentUser, getAuthHeaders }) {
 
   const loadMessages = async () => {
     try {
-      const res = await fetch(`/api/orders/${orderId}/messages`);
+      const token = localStorage.getItem('lastmile_token');
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+      const res = await fetch(`/api/orders/${orderId}/messages`, { headers });
       const data = await res.json();
       if (Array.isArray(data)) setMessages(data);
     } catch (err) {
@@ -324,7 +326,7 @@ function MapComponent({ zones, orders, agents, activeSelection, onMapClick, opti
 // 2. ADMIN PANEL COMPONENT
 // ==========================================
 
-function AdminPanel({ zones, orders, agents, rates, onAddZone, onDeleteZone, onUpdateRates, onAutoAssign, onManualAssign, onTriggerVRPOptimize, mapClickCoords, clearMapClickCoords, onCalculateRates, onPlaceOrder, weather, traffic }) {
+function AdminPanel({ zones, orders, agents, rates, onAddZone, onDeleteZone, onUpdateRates, onAutoAssign, onManualAssign, onTriggerVRPOptimize, mapClickCoords, clearMapClickCoords, onCalculateRates, onPlaceOrder, weather, traffic, getAuthHeaders }) {
   const [activeSubTab, setActiveSubTab] = useState('orders');
   const [zoneName, setZoneName] = useState('');
   const [zoneRadius, setZoneRadius] = useState(3.0);
@@ -349,11 +351,13 @@ function AdminPanel({ zones, orders, agents, rates, onAddZone, onDeleteZone, onU
   const [selectingCoordFor, setSelectingCoordFor] = useState(null);
   const [pricingBreakdown, setPricingBreakdown] = useState(null);
 
-  // Load active customers
+  // Load active customers (admin-only endpoint)
   useEffect(() => {
-    fetch('/api/customers')
+    const token = localStorage.getItem('lastmile_token');
+    fetch('/api/customers', { headers: token ? { 'Authorization': `Bearer ${token}` } : {} })
       .then(res => res.json())
-      .then(data => { if (Array.isArray(data)) setCustomers(data); });
+      .then(data => { if (Array.isArray(data)) setCustomers(data); })
+      .catch(console.error);
   }, []);
 
   // Sync clicked coordinates
@@ -1287,8 +1291,15 @@ function NotificationsBar({ notifications, onRefresh }) {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => {
+    const token = localStorage.getItem('lastmile_token');
     const stored = localStorage.getItem('lastmile_user');
-    return stored ? JSON.parse(stored) : null;
+    // Only restore session if both token AND user data exist
+    if (token && stored) {
+      try { return JSON.parse(stored); } catch { return null; }
+    }
+    // Clear any stale data
+    localStorage.removeItem('lastmile_user');
+    return null;
   });
 
   const [activeTab, setActiveTab] = useState('customer');
@@ -1308,17 +1319,15 @@ export default function App() {
   const [selectedOrderId, setSelectedOrderId] = useState(null);
 
   const getAuthHeaders = () => {
-    if (!currentUser) return {};
-    return {
-      'X-User-Id': String(currentUser.id),
-      'X-Role': currentUser.role,
-      'X-Username': currentUser.username
-    };
+    const token = localStorage.getItem('lastmile_token');
+    if (!token) return {};
+    return { 'Authorization': `Bearer ${token}` };
   };
 
-  const handleLoginSuccess = (user) => {
-    setCurrentUser(user);
+  const handleLoginSuccess = ({ token, user }) => {
+    localStorage.setItem('lastmile_token', token);
     localStorage.setItem('lastmile_user', JSON.stringify(user));
+    setCurrentUser(user);
     if (user.role === 'customer') setActiveTab('customer');
     else if (user.role === 'agent') setActiveTab('agent');
     else if (user.role === 'admin') setActiveTab('admin');
@@ -1326,45 +1335,38 @@ export default function App() {
 
   const handleSignOut = () => {
     setCurrentUser(null);
+    localStorage.removeItem('lastmile_token');
     localStorage.removeItem('lastmile_user');
-  };
-
-  const handleReviewerQuickLogin = async (username, password) => {
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        handleLoginSuccess(data);
-      } else {
-        alert('Quick login failed: ' + data.error);
-      }
-    } catch (err) {
-      console.error(err);
-    }
   };
 
   const loadAllData = async () => {
     try {
-      const headers = getAuthHeaders();
-      const [resOrders, resAgents, resZones, resRates, resNotifs] = await Promise.all([
-        fetch('/api/orders', { headers }).then(res => res.json()),
-        fetch('/api/agents').then(res => res.json()),
-        fetch('/api/zones').then(res => res.json()),
-        fetch('/api/rates').then(res => res.json()),
-        fetch('/api/notifications').then(res => res.json())
-      ]);
+      const authHeaders = getAuthHeaders();
+      const contentHeaders = { 'Content-Type': 'application/json', ...authHeaders };
 
-      if (Array.isArray(resOrders)) setOrders(resOrders);
+      // Always fetch agents and zones (needed for map)
+      const agentPromise = fetch('/api/agents', { headers: authHeaders }).then(r => r.json());
+      const zonePromise = fetch('/api/zones', { headers: authHeaders }).then(r => r.json());
+
+      const [resAgents, resZones] = await Promise.all([agentPromise, zonePromise]);
       if (Array.isArray(resAgents)) setAgents(resAgents);
       if (Array.isArray(resZones)) setZones(resZones);
-      if (Array.isArray(resRates)) setRates(resRates);
-      if (Array.isArray(resNotifs)) setNotifications(resNotifs);
+
+      // Orders are always scoped by role server-side
+      const resOrders = await fetch('/api/orders', { headers: authHeaders }).then(r => r.json());
+      if (Array.isArray(resOrders)) setOrders(resOrders);
+
+      // Admin-only data
+      if (currentUser?.role === 'admin') {
+        const [resRates, resNotifs] = await Promise.all([
+          fetch('/api/rates', { headers: authHeaders }).then(r => r.json()),
+          fetch('/api/notifications', { headers: authHeaders }).then(r => r.json())
+        ]);
+        if (Array.isArray(resRates)) setRates(resRates);
+        if (Array.isArray(resNotifs)) setNotifications(resNotifs);
+      }
     } catch (err) {
-      console.error(err);
+      console.error('loadAllData error:', err);
     }
   };
 
@@ -1385,12 +1387,16 @@ export default function App() {
   }, [currentUser]);
 
   const handleResetSimulation = async () => {
-    if (window.confirm('Wipe and reset the database?')) {
-      const res = await fetch('/api/simulation/reset', { method: 'POST' }).then(r => r.json());
+    if (window.confirm('Wipe and reset the database? This will delete ALL data.')) {
+      const res = await fetch('/api/simulation/reset', {
+        method: 'POST',
+        headers: getAuthHeaders()
+      }).then(r => r.json());
       if (res.success) {
-        alert('Simulation database reset.');
-        loadAllData();
-        setOptimizedRoute(null);
+        alert('Database reset. You will be signed out.');
+        handleSignOut();
+      } else {
+        alert(res.error || 'Reset failed.');
       }
     }
   };
@@ -1485,11 +1491,12 @@ export default function App() {
   const handleSimulateGPS = async (agentId, lat, lng) => {
     const res = await fetch('/api/simulation/agent-gps', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ agent_id: agentId, lat, lng })
     }).then(r => r.json());
     loadAllData();
     setActiveSelection([lat, lng]);
+    return res;
   };
 
   const handleMapClick = (lat, lng) => {
@@ -1511,25 +1518,19 @@ export default function App() {
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           {currentUser && (
-            <div className="reviewer-hud">
-              <span className="hud-title">Evaluator HUD:</span>
-              <button className="hud-btn" onClick={() => handleReviewerQuickLogin('admin', 'admin123')}>Admin</button>
-              <button className="hud-btn" onClick={() => handleReviewerQuickLogin('customer1', 'cust123')}>Customer 1</button>
-              <button className="hud-btn" onClick={() => handleReviewerQuickLogin('agent_soho', 'agent123')}>Rider Soho</button>
-              <button className="hud-btn" onClick={() => handleReviewerQuickLogin('agent_brooklyn', 'agent123')}>Rider Brooklyn</button>
+            <div className="user-badge" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Signed in as</span>
+              <strong>👤 {currentUser.username}</strong>
+              <span style={{ fontSize: '0.65rem', background: currentUser.role === 'admin' ? 'rgba(239,68,68,0.15)' : currentUser.role === 'agent' ? 'rgba(245,158,11,0.15)' : 'rgba(99,102,241,0.15)', color: currentUser.role === 'admin' ? '#f87171' : currentUser.role === 'agent' ? '#fbbf24' : '#a5b4fc', padding: '0.1rem 0.5rem', borderRadius: '999px', border: '1px solid currentColor', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{currentUser.role}</span>
+              <button className="hud-btn" onClick={handleSignOut} style={{ marginLeft: '0.25rem', background: '#ef4444', borderColor: 'transparent', color: '#fff' }}>Sign Out</button>
             </div>
           )}
 
-          {currentUser && (
-            <div className="user-badge">
-              👤 {currentUser.username}
-              <button className="hud-btn" onClick={handleSignOut} style={{ marginLeft: '0.5rem', background: '#ef4444', borderColor: 'transparent', color: '#fff' }}>Sign Out</button>
-            </div>
+          {currentUser?.role === 'admin' && (
+            <button className="btn btn-secondary" onClick={handleResetSimulation} style={{ padding: '0.45rem 0.75rem', fontSize: '0.75rem', width: 'auto' }}>
+              <RefreshCw size={12}/> Reset DB
+            </button>
           )}
-
-          <button className="btn btn-secondary" onClick={handleResetSimulation} style={{ padding: '0.45rem 0.75rem', fontSize: '0.75rem', width: 'auto' }}>
-            <RefreshCw size={12}/> Reset DB
-          </button>
         </div>
       </header>
 
@@ -1582,6 +1583,7 @@ export default function App() {
               onAutoAssign={handleAutoAssign} onManualAssign={handleManualAssign} onTriggerVRPOptimize={handleTriggerVRPOptimize}
               mapClickCoords={mapClickCoords} clearMapClickCoords={() => setMapClickCoords(null)}
               onCalculateRates={handleCalculateRates} onPlaceOrder={handlePlaceOrder} weather={weather} traffic={traffic}
+              getAuthHeaders={getAuthHeaders}
             />
           </section>
 
