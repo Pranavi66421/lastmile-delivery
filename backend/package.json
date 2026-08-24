@@ -2,10 +2,10 @@
   "name": "enterprise-lastmile-backend",
   "version": "1.0.0",
   "description": "Backend API for Enterprise Last-Mile Delivery Tracker",
-  "main": "server.js",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
     "test": "node --test tests/logistics.test.js"
   },
   "dependencies": {
