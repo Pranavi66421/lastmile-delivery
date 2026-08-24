@@ -167,6 +167,15 @@ const initDB = async () => {
     timestamp TEXT DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Ratings Table
+  await run(`CREATE TABLE IF NOT EXISTS ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL UNIQUE,
+    agent_id INTEGER NOT NULL,
+    rating INTEGER NOT NULL,
+    timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // Interactive Chat Messages
   await run(`CREATE TABLE IF NOT EXISTS chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -993,6 +1002,26 @@ app.post('/api/orders/:id/status', requireRole('agent', 'admin'), async (req, re
   }
 });
 
+app.post('/api/orders/:id/rate', requireRole('customer'), async (req, res) => {
+  const { rating } = req.body;
+  if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: 'Rating must be between 1 and 5' });
+  try {
+    const order = await get('SELECT * FROM orders WHERE id = ?', [req.params.id]);
+    if (!order || order.customer_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+    if (order.status !== 'Delivered') return res.status(400).json({ error: 'Can only rate delivered orders' });
+    
+    await run('INSERT INTO ratings (order_id, agent_id, rating) VALUES (?, ?, ?)', [order.id, order.agent_id, rating]);
+    const avgObj = await get('SELECT AVG(rating) as avg FROM ratings WHERE agent_id = ?', [order.agent_id]);
+    const newAvg = avgObj.avg ? Number(avgObj.avg.toFixed(1)) : 5.0;
+    await run('UPDATE users SET rating = ? WHERE id = ?', [newAvg, order.agent_id]);
+    
+    res.json({ success: true, newRating: newAvg });
+  } catch (err) {
+    if (err.message.includes('UNIQUE')) return res.status(400).json({ error: 'You have already rated this rider for this order' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Reschedule Slots Efficiency Lookup (customer can only look up their own order)
 app.get('/api/orders/:id/reschedule-slots', requireAuth, async (req, res) => {
   const { date } = req.query;
@@ -1135,9 +1164,22 @@ app.get('/api/agents', requireAuth, async (req, res) => {
   }
 });
 
-app.get('/api/notifications', requireRole('admin'), async (req, res) => {
+app.get('/api/notifications', requireAuth, async (req, res) => {
   try {
-    const logs = await all('SELECT * FROM notification_logs ORDER BY id DESC LIMIT 40');
+    let logs;
+    if (req.user.role === 'admin') {
+      logs = await all('SELECT * FROM notification_logs ORDER BY id DESC LIMIT 40');
+    } else if (req.user.role === 'customer') {
+      logs = await all(
+        `SELECT n.* FROM notification_logs n
+         JOIN orders o ON n.order_id = o.id
+         WHERE o.customer_id = ?
+         ORDER BY n.id DESC LIMIT 40`,
+        [req.user.id]
+      );
+    } else {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
     res.json(logs);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1213,6 +1255,7 @@ app.post('/api/simulation/reset', requireRole('admin'), async (req, res) => {
     await run('DROP TABLE IF EXISTS order_history');
     await run('DROP TABLE IF EXISTS notification_logs');
     await run('DROP TABLE IF EXISTS chat_messages');
+    await run('DROP TABLE IF EXISTS ratings');
     
     await initDB();
     res.json({ success: true, message: 'Database reset' });

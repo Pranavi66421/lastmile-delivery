@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, Navigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Circle, Marker, Popup, Polyline, useMap, useMapEvents } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { 
   Truck, Shield, Navigation, Trophy, Star, Plus, Trash2, 
@@ -56,98 +58,7 @@ function ChangeView({ center }) {
   return null;
 }
 
-function AuthOverlay({ onLoginSuccess }) {
-  const [isRegister, setIsRegister] = useState(false);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setErrorMsg('');
-    setLoading(true);
-    const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
-    const payload = isRegister 
-      ? { username, password, email, phone }
-      : { username, password };
-      
-    try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (res.ok) {
-        onLoginSuccess(data);
-      } else {
-        setErrorMsg(data.error || 'Authentication failed');
-      }
-    } catch (err) {
-      setErrorMsg('Server connection failed. Is the backend running?');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="auth-overlay">
-      <div className="auth-card glass-card">
-        <div className="auth-header">
-          <div className="auth-logo">
-            <Truck size={32} color="#6366f1" />
-          </div>
-          <h2 className="auth-title">Think Last-Mile</h2>
-          <p className="auth-subtitle">Logistics Routing &amp; Dispatch Platform</p>
-        </div>
-        {errorMsg && (
-          <div style={{ color: '#ef4444', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', padding: '0.5rem', borderRadius: '6px', fontSize: '0.75rem', marginBottom: '1rem', textAlign: 'center' }}>
-            {errorMsg}
-          </div>
-        )}
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label className="form-label">Username</label>
-            <input type="text" className="form-input" value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Password</label>
-            <input type="password" className="form-input" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" />
-          </div>
-          {isRegister && (
-            <>
-              <div className="form-group">
-                <label className="form-label">Email</label>
-                <input type="email" className="form-input" value={email} onChange={e => setEmail(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Phone Number</label>
-                <input type="tel" className="form-input" placeholder="+15550000" value={phone} onChange={e => setPhone(e.target.value)} />
-              </div>
-              <div style={{ fontSize: '0.7rem', color: '#94a3b8', padding: '0.4rem 0', marginBottom: '0.5rem', lineHeight: 1.5 }}>
-                🔒 Self-registration creates a <strong>Customer</strong> account only.
-                Agents and Admins are provisioned by system administrators.
-              </div>
-            </>
-          )}
-          <button type="submit" className="btn btn-accent" style={{ marginTop: '1rem' }} disabled={loading}>
-            {loading ? 'Please wait...' : (isRegister ? 'Create Account' : 'Sign In')}
-          </button>
-        </form>
-        <div className="auth-toggle">
-          {isRegister ? (
-            <span>Already have an account? <span className="auth-toggle-link" onClick={() => { setIsRegister(false); setErrorMsg(''); }}>Sign In</span></span>
-          ) : (
-            <span>New customer? <span className="auth-toggle-link" onClick={() => { setIsRegister(true); setErrorMsg(''); }}>Register here</span></span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function ChatPanel({ orderId, currentUser, getAuthHeaders }) {
   const [messages, setMessages] = useState([]);
@@ -801,7 +712,7 @@ function CustomerPortal({ orders, mapClickCoords, clearMapClickCoords, onCalcula
   useEffect(() => {
     if (!selectedOrderId) { setOrderDetail(null); return; }
     setLoadingDetail(true);
-    const token = localStorage.getItem('lastmile_token');
+    const token = sessionStorage.getItem('lastmile_token');
     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
     fetch(`/api/orders/${selectedOrderId}`, { headers })
       .then(r => r.json())
@@ -812,7 +723,7 @@ function CustomerPortal({ orders, mapClickCoords, clearMapClickCoords, onCalcula
 
   useEffect(() => {
     if (rescheduleDate && selectedOrderId) {
-      const token = localStorage.getItem('lastmile_token');
+      const token = sessionStorage.getItem('lastmile_token');
       const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
       fetch(`/api/orders/${selectedOrderId}/reschedule-slots?date=${rescheduleDate}`, { headers })
         .then(res => res.json())
@@ -885,11 +796,27 @@ function CustomerPortal({ orders, mapClickCoords, clearMapClickCoords, onCalcula
     setRescheduleDate('');
     setSelectedRescheduleSlot('');
     // Refresh order detail after reschedule
-    const token = localStorage.getItem('lastmile_token');
+    const token = sessionStorage.getItem('lastmile_token');
     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
     fetch(`/api/orders/${selectedOrderId}`, { headers })
       .then(r => r.json())
       .then(data => { if (data && data.id) setOrderDetail(data); });
+  };
+
+  const handleRateAgent = async (rating) => {
+    try {
+      const token = sessionStorage.getItem('lastmile_token');
+      const headers = { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
+      const res = await fetch(`/api/orders/${selectedOrderId}/rate`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ rating })
+      }).then(r => r.json());
+      if (res.error) alert(res.error);
+      else alert('Thank you for rating your rider!');
+    } catch (e) {
+      alert('Failed to submit rating.');
+    }
   };
 
   const selectedOrder = orderDetail; // always use full detail with history
@@ -1092,6 +1019,21 @@ function CustomerPortal({ orders, mapClickCoords, clearMapClickCoords, onCalcula
                     <div>Placed: <strong style={{ color: '#e2e8f0' }}>{new Date(selectedOrder.created_at).toLocaleDateString()}</strong></div>
                   </div>
                 </div>
+
+                {/* Rate Rider Section */}
+                {selectedOrder.status === 'Delivered' && (
+                  <div className="glass-card" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.15)', textAlign: 'center', marginBottom: '0.75rem' }}>
+                    <h4 style={{ fontSize: '0.85rem', color: '#34d399', marginBottom: '0.5rem' }}>How was your delivery?</h4>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
+                      {[1, 2, 3, 4, 5].map(star => (
+                        <button key={star} onClick={() => handleRateAgent(star)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', transition: 'transform 0.1s' }} onMouseOver={e => e.target.style.transform = 'scale(1.2)'} onMouseOut={e => e.target.style.transform = 'scale(1)'}>
+                          ⭐
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.5rem' }}>Tap a star to rate rider {selectedOrder.agent_name}</div>
+                  </div>
+                )}
 
                 {/* Reschedule section for Failed orders */}
                 {selectedOrder.status === 'Failed' && (
@@ -1413,14 +1355,14 @@ function NotificationsBar({ notifications, onRefresh }) {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => {
-    const token = localStorage.getItem('lastmile_token');
-    const stored = localStorage.getItem('lastmile_user');
+    const token = sessionStorage.getItem('lastmile_token');
+    const stored = sessionStorage.getItem('lastmile_user');
     // Only restore session if both token AND user data exist
     if (token && stored) {
       try { return JSON.parse(stored); } catch { return null; }
     }
     // Clear any stale data
-    localStorage.removeItem('lastmile_user');
+    sessionStorage.removeItem('lastmile_user');
     return null;
   });
 
@@ -1441,24 +1383,27 @@ export default function App() {
   const [selectedOrderId, setSelectedOrderId] = useState(null);
 
   const getAuthHeaders = () => {
-    const token = localStorage.getItem('lastmile_token');
+    const token = sessionStorage.getItem('lastmile_token');
     if (!token) return {};
     return { 'Authorization': `Bearer ${token}` };
   };
 
   const handleLoginSuccess = ({ token, user }) => {
-    localStorage.setItem('lastmile_token', token);
-    localStorage.setItem('lastmile_user', JSON.stringify(user));
+    sessionStorage.setItem('lastmile_token', token);
+    sessionStorage.setItem('lastmile_user', JSON.stringify(user));
     setCurrentUser(user);
     if (user.role === 'customer') setActiveTab('customer');
     else if (user.role === 'agent') setActiveTab('agent');
     else if (user.role === 'admin') setActiveTab('admin');
   };
 
+  const navigate = useNavigate();
+
   const handleSignOut = () => {
     setCurrentUser(null);
-    localStorage.removeItem('lastmile_token');
-    localStorage.removeItem('lastmile_user');
+    sessionStorage.removeItem('lastmile_token');
+    sessionStorage.removeItem('lastmile_user');
+    navigate('/');
   };
 
   const loadAllData = async () => {
@@ -1480,11 +1425,13 @@ export default function App() {
 
       // Admin-only data
       if (currentUser?.role === 'admin') {
-        const [resRates, resNotifs] = await Promise.all([
-          fetch('/api/rates', { headers: authHeaders }).then(r => r.json()),
-          fetch('/api/notifications', { headers: authHeaders }).then(r => r.json())
-        ]);
+        const resRates = await fetch('/api/rates', { headers: authHeaders }).then(r => r.json());
         if (Array.isArray(resRates)) setRates(resRates);
+      }
+      
+      // Notifications
+      if (currentUser?.role === 'admin' || currentUser?.role === 'customer') {
+        const resNotifs = await fetch('/api/notifications', { headers: authHeaders }).then(r => r.json());
         if (Array.isArray(resNotifs)) setNotifications(resNotifs);
       }
     } catch (err) {
@@ -1625,11 +1572,12 @@ export default function App() {
     setMapClickCoords({ lat, lng });
   };
 
+  if (!currentUser) {
+    return <Navigate to="/" replace />;
+  }
+
   return (
     <div className="app-container">
-      {!currentUser && (
-        <AuthOverlay onLoginSuccess={handleLoginSuccess} />
-      )}
 
       <header className="header">
         <div className="header-title">
